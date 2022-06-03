@@ -8,7 +8,8 @@ from pyspark.sql import SparkSession
 from pyspark.sql.window import Window
 from pyspark.sql.types import StructType
 from pyspark.sql.functions import *
-
+from datetime import datetime
+from datetime import timedelta
 
 spark = SparkSession.builder\
 	.master("local").appName("hdfs_test").getOrCreate()
@@ -17,12 +18,16 @@ spark = SparkSession.builder\
 mttf=2500
 rpm10=10
 expected_days=int(mttf/24)
-print('expected_days ' + str(expected_days))
+#print('expected_days ' + str(expected_days))
 
 # airfilter installation date -- needs to be input variable?
 airfilterdate='2022-03-01 00:00:00'
+afdate=datetime.strptime(airfilterdate,"%Y-%m-%d %H:%M:%S")
+afdate=afdate + timedelta(days=expected_days)
 
-print('new airfilter installed on ' + str(airfilterdate))
+installdate=datetime.strptime(airfilterdate,"%Y-%m-%d %H:%M:%S").strftime('%Y-%m-%d')
+
+print('New airfilter installed on ' + str(installdate) + ', estimated date of expiration ' + str(afdate.strftime('%Y-%m-%d')))
 
 aqschema = StructType() \
                         .add("timestamp","timestamp") \
@@ -59,7 +64,7 @@ pmcount=aqdata.select(count("timestamp").alias("pmcount"))
 # Do the math
 aqdata2=aqdata.groupBy(to_date("timestamp").alias("tdate")).agg(sum("PM10").alias("PM10_SUM"),count("timestamp").alias("num_count"),avg("PM10").alias("PM_10_avg"))
 
-aqdata2=aqdata2.withColumn('estpartPM10',((col('num_count') * lit(10)))).withColumn('estdiff',((col('PM10_SUM') - col('num_count') * lit(10))))
+aqdata2=aqdata2.withColumn('estpartPM10',((col('num_count') * lit(rpm10)))).withColumn('estdiff',((col('PM10_SUM') - col('num_count') * lit(rpm10))))
                 
 aqdata2=aqdata2.orderBy(col("tdate"))
 windowSpec=Window.partitionBy().orderBy("tdate")
@@ -77,10 +82,18 @@ aqdata3=aqdata2.select(col("tdate").alias("Date"),col("days_remaining"), \
                col("estpm10_rolling_total").cast('int').alias("pm10_estimated_total"), \
                col("PM_10_avg").cast('int').alias("measured_pm10_average")  
                )
-aqdata3.filter(aqdata3['actual_days_remaining']==0).select(first(col("Date")).alias("AirfilterExpirationDate")).show()
 
+act_expdate=aqdata3.filter(aqdata3['actual_days_remaining']==0).select(first(col("Date")).alias("AirfilterExpirationDate")).toPandas()
+#print(act_expdate.values[0])
+act_expdate=pd.to_datetime(act_expdate.values[0])
+
+print('Actual date of expiration is predicted to be ' + act_expdate.item().strftime('%Y-%m-%d'))
 # plot the graphs
 aqdata4=aqdata3.toPandas()
-aqdata4.plot(x='Date',y=['days_remaining','actual_days_remaining'])
-aqdata4.plot(x='Date',y=['pm10_measured_total','pm10_estimated_total'],ylim=(0,1500000))
-aqdata4.plot(x='Date',y='measured_pm10_average',ylim=(0,100))
+
+aqdata4.plot(figsize=(24,8),x='Date',y=['days_remaining','actual_days_remaining'],color=['blue','red'],linewidth=3.0)
+aqdata4.plot(figsize=(24,8),x='Date',y=['pm10_estimated_total','pm10_measured_total'],ylim=(0,1500000),color=['blue','red'],linewidth=3.0)
+aqdata4.plot.bar(figsize=(24,8),x='Date',y='measured_pm10_average',ylim=(0,100))
+
+
+aqdata3.show(200,truncate=False)
